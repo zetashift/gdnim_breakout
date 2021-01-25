@@ -10,13 +10,18 @@ config_version=4
 
 [application]
 
-config/name="Gdnim"
-run/main_scene="res://scenes/main.tscn"
+config/name="Basic Breakout!"
+run/main_scene="res://scenes/Level1.tscn"
 config/icon="res://icon.png"
 
 [autoload]
 
 Watcher="*res://_tscn/watcher.tscn"
+
+[display]
+
+window/size/width=640
+window/size/height=360
 
 [rendering]
 
