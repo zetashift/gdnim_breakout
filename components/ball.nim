@@ -1,6 +1,5 @@
-import godot
+import gdnim
 import godotapi / [node, rigid_body_2d]
-import hot
 
 gdobj Ball of RigidBody2D:
   var speedUp {.gdExport.} = 50

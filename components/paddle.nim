@@ -1,8 +1,7 @@
-import godot
+import gdnim
 import godotapi / [kinematic_body_2d, viewport,
                    packed_scene, input_event_mouse_button,
                    resource_loader, scene_tree]
-import hot
 
 gdobj Paddle of KinematicBody2D:
   var ballScene: PackedScene

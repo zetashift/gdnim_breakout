@@ -1,9 +1,8 @@
-import godot
+import gdnim
 import godotapi / [node, resource_loader, packed_scene, v_box_container, line_edit, scene_tree, theme]
 import os, strformat, times
 from sequtils import keepItIf
 import tables, sets, hashes
-import hot
 
 #[
 Watcher monitors the dll files for component changes.
@@ -175,7 +174,8 @@ when defined(does_reload):
 
         for compName in self.compMetaTable.keys:
           if (not (compName in self.reloadingComps)) and fileExists(compName.safeDllPath) and
-            getLastModificationTime(compName.safeDllPath) > getLastModificationTime(compName.hotDllPath):
+            getLastModificationTime(compName.safeDllPath) > getLastModificationTime(compName.hotDllPath) and
+            getFileSize(compName.safeDllPath) > 0:
             self.get_tree().paused = true
             self.notify(UNLOADING, &"Watcher unloading: {compName}")
             self.reloadingComps.add(compName)
@@ -206,7 +206,7 @@ when defined(does_reload):
       try:
         if not self.compMetaTable.hasKey(compName):
           self.notify(REGISTER_COMP, &"Watcher registering {compName}")
-          self.compMetaTable[compName] = ComponentMeta(resourcePath: findCompTscn(compName), saverProc: saverProc, loaderProc: loaderProc)
+          self.compMetaTable[compName] = ComponentMeta(resourcePath: findScene(compName), saverProc: saverProc, loaderProc: loaderProc)
           self.instancesByCompNameTable[compName] = @[]
 
         var instNode = self.get_node(saverPath)
@@ -273,7 +273,7 @@ when defined(does_reload):
       self.emit_signal("notice", int(code).toVariant, msg.toVariant)
 
 else:
-  gdobj Watcher of Control:
+  gdobj(Watcher of Control):
     var enableWatch {.gdExport.}:bool = true
     var watchIntervalSeconds {.gdExport.}:float = 0.3
     var reloadIntervalSeconds {.gdExport.}:float = 0.3

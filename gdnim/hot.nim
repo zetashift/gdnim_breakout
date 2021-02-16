@@ -1,11 +1,11 @@
-import macros, strformat, os
-from strutils import contains
+import macros, strformat
 import msgpack4nim, options, optionsutils
 export msgpack4nim, options, optionsutils
 
 const does_reload* {.booldefine.}: bool = true
+const is_tool* {.booldefine.}: bool = false
 
-proc `^`*(s:string):NimNode {.inline.} =
+proc `^`(s:string):NimNode {.inline.} =
   ident(s)
 
 type
@@ -193,26 +193,3 @@ macro register_dependencies*(compName:untyped, dependencies:varargs[untyped]):un
       )
   else:
     discard
-
-
-const tscnDir = "_tscn"
-# find the resource at runtime, returns the first resource that matches compName
-proc findCompTscn*(compName:string):string =
-  var tscnFilename = &"{compName}.tscn"
-  var matches:seq[string]
-  for f in walkDirRec(&"{tscnDir}"):
-    if f.contains(tscnFilename):
-      matches.add move(&"res://{f}")
-  if matches.len == 1:
-    return matches[0]
-  if matches.len == 0:
-    raise newException(IOError, &"Scene resource for {compName} could not be found!")
-  if matches.len > 1:
-    raise newException(IOError, &"Multiple resources found with {compName}:\n\t{matches}")
-
-# helper to convert types and execute body, if object can be cast to type
-# example: ifis(event, InputEventKey): print it.scancode
-template ifis*(a:typed, T:typed, body:untyped):untyped =
-  if a of T:
-    var it {.inject.} = a as T
-    body
