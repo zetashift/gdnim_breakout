@@ -1,12 +1,15 @@
 from sequtils import filterIt
-import os, osproc, tables, parseopt, strutils, strformat, parsecfg, terminal
+import os, osproc, times, tables, parseopt, strutils, strformat, parsecfg, terminal
 
 # Dependencies
 #requires "godot >= 0.8.1"
 #requires "msgpack4nim"
 
+var buildini:string = "build.ini"
+
 type
   Task = tuple[task_name:string, description:string, task_proc: proc():void {.nimcall.}]
+  BuildSettings = tuple[sharedFlags:string, settingsTable:Table[string, bool]]
 
 var tasks:seq[Task] = @[]
 
@@ -33,6 +36,7 @@ let allCompilerFlagsTable = {
   "lib":"--app:lib --noMain",
   "mute":"--warning[LockLevel]:off --hint[Processing]:off",
   "parallel":"--parallelBuild:0",
+  "incremental":"--incremental:on",
   # cc
     "cc":"--cc:tcc", # doesn't work with threads:on
     # compiles that fastest, clean compile output, does not work with threads:on
@@ -40,6 +44,7 @@ let allCompilerFlagsTable = {
     # clean compile output, needs gcc dlls, produces large dlls by default, use strip
     "gcc":"--cc:gcc --threads:on --tlsEmulation:off",
     "gcc_strip": "--d:strip", # same as "--passL:\"-s\"", # removes debug symbols
+    "gcc_flto": "--passC:-flto", # https://gcc.gnu.org/wiki/LinkTimeOptimization
     # smallest dlls, godot uses same compiler, disable warnings, slow, lots of compile artifacts
     "vcc":"--cc:vcc --passC=\"/wd4133\" --threads:on --tlsEmulation:off",
   # gc
@@ -48,7 +53,8 @@ let allCompilerFlagsTable = {
     "realtime":"--d:useRealtimeGC",
   "useMalloc":"--d:useMalloc", # use C memory primitives
   # build_kind
-    "release":"--d:danger",
+    "danger":"--d:danger",
+    "release":"--d:release",
     "debug":"--debugger:native --stackTrace:on",
     "diagnostic":"--d:danger --debugger:native", #for dumpincludes
   # hot
@@ -70,18 +76,18 @@ var otherFlagsTable:Table[string, string]
 
 proc configError(errMsg:string, prescription:string) =
   stderr.setForegroundColor(fgRed, true)
-  stderr.styledWrite("build.ini error: ", fgRed, errMsg)
+  stderr.styledWrite(&"{buildini} error: ", fgRed, errMsg)
   stderr.styledWrite("\n  Expected: ", fgWhite, prescription)
   quit()
 
 proc setFlag(flag:string, val:string = "on") =
   case flag:
     of "build_kind":
-      if val in ["debug", "release", "diagnostic"]:
+      if val in ["danger", "release", "debug", "diagnostic"]:
         taskCompilerFlagsTable.del("build_kind")
         taskCompilerFlagsTable["build_kind"] = allCompilerFlagsTable[val]
       else:
-        configError(&"build_kind = \"{val}\"", "debug, release, or diagnostic")
+        configError(&"build_kind = \"{val}\"", "danger, release, debug, or diagnostic")
     of "cc":
       if val in ["gcc", "vcc", "tcc"]:
         taskCompilerFlagsTable.del("cc")
@@ -105,22 +111,6 @@ proc setFlag(flag:string, val:string = "on") =
       else:
         otherFlagsTable[flag] = val
 
-var config = loadConfig("build.ini")
-
-setFlag("reload", config.getSectionValue("Hot", "reload"))
-setFlag("build_kind", config.getSectionValue("Compiler", "build_kind"))
-
-setFlag("cc", config.getSectionValue("Compiler", "cc"))
-if config.getSectionValue("Compiler", "cc") == "gcc" and
-  config.getSectionValue("Compiler", "build_kind") != "diagnostic":
-  setFlag("gcc_strip", config.getSectionValue("GCC", "strip"))
-
-setFlag("gc", config.getSectionValue("Compiler", "gc"))
-case config.getSectionValue("Compiler", "gc"):
-  of "arc", "orc":
-    setFlag("useMalloc", config.getSectionValue("Compiler", "useMalloc"))
-  else: discard
-
 var taskName = ""
 var compName = ""
 var args:seq[string]
@@ -135,6 +125,8 @@ for kind, key, val in p.getopt():
       setFlag("force")
     of "m":
       setFlag("move")
+    of "ini":
+      buildini = val
     else:
       setFlag(key, val)
   of cmdArgument:
@@ -142,6 +134,61 @@ for kind, key, val in p.getopt():
       taskName = key
     else:
       args.add key
+
+echo &"config file: {buildini}"
+var config = loadConfig(buildini)
+
+setFlag("reload", config.getSectionValue("Hot", "reload"))
+setFlag("build_kind", config.getSectionValue("Compiler", "build_kind"))
+
+setFlag("cc", config.getSectionValue("Compiler", "cc"))
+if config.getSectionValue("Compiler", "cc") == "gcc":
+  var build_kind = config.getSectionValue("Compiler", "build_kind")
+  if build_kind != "diagnostic":
+    setFlag("gcc_strip", config.getSectionValue("GCC", "strip"))
+
+  setFlag("gcc_flto", config.getSectionValue("GCC", "flto"))
+
+setFlag("gc", config.getSectionValue("Compiler", "gc"))
+case config.getSectionValue("Compiler", "gc"):
+  of "arc", "orc":
+    setFlag("useMalloc", config.getSectionValue("Compiler", "useMalloc"))
+  else: discard
+
+setFlag("incremental", config.getSectionValue("Compiler", "incremental"))
+
+proc genNimCfg() =
+  echo "Generating nim.cfg"
+  var depsDir = config.getSectionValue("Dir", "deps")
+  var depsGodotDir = config.getSectionValue("Dir", "deps_godot")
+  var nimCfg = open("nim.cfg", fmWrite)
+  nimCfg.write( """
+# This file is autogenerated by "./build" from build.ini's settings.
+# It's used by nimsuggest for autocompletion.
+""")
+  nimCfg.write(&"--path:\"{depsDir}\"\n--path:\"{depsDir}/{depsGodotDir}\"")
+  nimCfg.close()
+
+if not fileExists("nim.cfg"):
+  genNimCfg()
+elif getLastModificationTime("build.ini") > getLastModificationTime("nim.cfg"):
+  var paths:seq[string]
+  paths.add config.getSectionValue("Dir", "deps")
+  paths.add config.getSectionValue("Dir", "deps_godot")
+
+  var nimCfg = open("nim.cfg").readAll().split("\n")[2..3].join(" ")
+  var np = initOptParser(nimCfg)
+  for kind, key, val in np.getopt():
+    case kind
+    of cmdLongOption:
+      case key
+      of "path":
+        if not (val in paths):
+          genNimCfg()
+          break
+      else:
+        discard
+    else: discard
 
 proc getSharedFlags():string =
   var sharedFlags = ""

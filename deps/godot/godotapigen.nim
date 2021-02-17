@@ -327,6 +327,13 @@ const arrayTypes = toHashSet(["Array", "PoolByteArray",
   "PoolVector3Array", "PoolColorArray"])
 const wrapperTypes = union(arrayTypes,
                            toHashSet(["NodePath", "Dictionary", "Variant"]))
+const baseApiTypes = toHashSet(
+  ["void", "bool", "int64", "float64", "string", "Error",
+   "Vector2", "Rect2", "Vector3", "Transform2D", "Plane", "Quat", "AABB",
+   "Basis", "Transform", "Color", "RID", "NodePath", "Dictionary", "Variant",
+   "Array", "PoolByteArray", "PoolIntArray", "PoolRealArray", "PoolStringArray",
+   "PoolVector2Array", "PoolVector3Array", "PoolColorArray"])
+
 
 proc getInternalPtr(varName: PNode, typ: string): PNode =
   assert(typ in wrapperTypes or typ == "Object")
@@ -906,6 +913,28 @@ proc typeNameToModuleName(name: string): string =
     # to avoid clash with stdlib
     result = "gd_os"
 
+proc addImportModule(types:Table[string, GodotType], typ:string, moduleTypes:var HashSet[string]) =
+  var nimType = toNimType(types, typ)
+  if (nimType notin baseApiTypes) and (nimType notin moduleTypes):
+    moduleTypes.incl nimType
+
+proc getImportModules(types:Table[string, GodotType], obj:JsonNode, className:string):seq[string] =
+  var nimType = toNimType(className)
+  var moduleTypes = toHashSet([nimType])
+  for property in obj["properties"]:
+    addImportModule(types, property["type"].str, moduleTypes)
+  for signal in obj["signals"]:
+    for arg in signal["arguments"]:
+      addImportModule(types, arg["type"].str, moduleTypes)
+  for meth in obj["methods"]:
+    addImportModule(types, meth["return_type"].str, moduleTypes)
+    for arg in meth["arguments"]:
+      addImportModule(types, arg["type"].str, moduleTypes)
+
+  moduleTypes.excl(nimType)
+  for moduleType in moduleTypes:
+    result.add(typeNameToModuleName(moduleType))
+
 proc newRegisterClassNode(typ: GodotType): PNode =
   newCall("registerClass",
     ident(typ.name),
@@ -1021,8 +1050,14 @@ proc genApi*(targetDir: string, apiJsonFile: string) =
     exportStmt.add(ident("godottypes"))
     tree.add(exportStmt)
 
-    var methodBindRegsitry = initHashSet[string]()
     let obj = typ.jsonNode
+
+    var imports = getImportModules(types, obj, typ.name)
+    for imp in imports:
+      importStmt.add(ident(imp))
+      exportStmt.add(ident(imp))
+
+    var methodBindRegsitry = initHashSet[string]()
     if typ.baseName != "NimGodotObject":
       let baseModule = typeNameToModuleName(typ.baseName)
       let baseModuleNode = if getIdent(baseModule).isKeyword:
